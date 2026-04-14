@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ChatNow</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Added Marked.js for Markdown parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
+        .token-low { color: #94a3b8; }
+        .token-mid { color: #f59e0b; }
+        .token-high { color: #ef4444; }
+        
+        /* Markdown Styling inside chat bubbles */
+        .markdown-content p { margin-bottom: 0.75rem; }
+        .markdown-content p:last-child { margin-bottom: 0; }
+        .markdown-content ul, .markdown-content ol { margin-left: 1.25rem; margin-bottom: 0.75rem; }
+        .markdown-content ul { list-style-type: disc; }
+        .markdown-content ol { list-style-type: decimal; }
+        .markdown-content li { margin-bottom: 0.25rem; }
+        .markdown-content strong { font-weight: 600; color: #111827; }
+        .markdown-content code { background: #f3f4f6; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-family: monospace; font-size: 0.85em; }
+    </style>
+</head>
+<body class="bg-white h-screen flex flex-col font-sans">
+
+    <header class="border-b border-gray-100 px-6 py-3 flex justify-between items-center bg-white/80 backdrop-blur-md sticky top-0 z-20">
+        <div class="flex items-center gap-2 font-bold text-gray-800 text-lg">
+            <div class="bg-black text-white p-1 rounded-md"><i data-lucide="sparkles" class="w-5 h-5"></i></div>
+            ChatNow
+
+            <!-- Demo Mode Badge -->
+            {% if demo_mode %}
+            <span class="bg-amber-100 text-amber-700 text-[10px] px-2 py-0.5 rounded-full border border-amber-200 uppercase tracking-wider">Demo Mode</span>
+            {% endif %}
+
+        </div>
+        <button id="newSessionBtn" class="text-xs text-gray-400 hover:text-gray-600 transition-colors flex items-center gap-1">
+            <i data-lucide="plus-circle" class="w-3.5 h-3.5"></i>
+            New Session
+        </button>
+    </header>
+
+    <main id="chatBox" class="flex-1 overflow-y-auto px-4 py-8 space-y-8 max-w-3xl mx-auto w-full custom-scrollbar"></main>
+
+    <div id="attachmentList" class="max-w-3xl mx-auto w-full px-4 flex flex-wrap gap-2 mb-2"></div>
+
+    <footer class="p-4 bg-white border-t border-gray-100">
+        <div class="max-w-3xl mx-auto">
+            <div class="relative bg-gray-50 rounded-2xl border border-gray-200 focus-within:border-gray-400 transition-all p-2 shadow-sm">
+                <form id="chatForm" class="flex flex-col">
+                    <textarea 
+                        id="messageInput" 
+                        rows="1" 
+                        placeholder="Please provide context, instructions, or a question here..." 
+                        class="bg-transparent border-none focus:ring-0 resize-none px-4 py-2 text-gray-800 w-full min-h-[44px] max-h-48"
+                    ></textarea>
+                    
+                    <div class="flex justify-between items-center px-2 pb-1">
+                        <div class="flex gap-1">
+                            <input type="file" id="fileInput" class="hidden" multiple accept=".pdf,.txt,.csv">
+                            <button type="button" id="attachBtn" class="p-2 text-gray-500 hover:bg-gray-200 rounded-lg transition-colors">
+                                <i data-lucide="paperclip" class="w-5 h-5"></i>
+                            </button>
+                        </div>
+                        
+                        <button type="submit" id="sendBtn" class="bg-black text-white p-2 rounded-xl hover:opacity-80 transition-opacity">
+                            <i data-lucide="arrow-up" class="w-5 h-5"></i>
+                        </button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="mt-3 flex flex-col gap-1 px-1">
+                <div class="flex justify-between items-center text-[10px] font-medium tracking-tight uppercase">
+                    <div class="flex items-center gap-2">
+                        <span class="text-gray-400">Context Usage</span>
+                        <button id="clearCtxBtn" class="text-blue-500 hover:text-blue-700 hidden">Clear Files</button>
+                    </div>
+                    <span id="tokenText" class="token-low">0 / 250,000 tokens</span>
+                </div>
+                <div class="w-full bg-gray-100 h-1 rounded-full overflow-hidden">
+                    <div id="tokenBar" class="bg-gray-300 h-full transition-all duration-500" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        lucide.createIcons();
+        const chatBox = document.getElementById('chatBox');
+        const chatForm = document.getElementById('chatForm');
+        const messageInput = document.getElementById('messageInput');
+        const fileInput = document.getElementById('fileInput');
+        const attachBtn = document.getElementById('attachBtn');
+        const attachmentList = document.getElementById('attachmentList');
+        const tokenText = document.getElementById('tokenText');
+        const tokenBar = document.getElementById('tokenBar');
+        const clearCtxBtn = document.getElementById('clearCtxBtn');
+        const newSessionBtn = document.getElementById('newSessionBtn');
+
+        const TOKEN_LIMIT = 250000;
+
+        // Configure marked to handle line breaks like GitHub
+        marked.setOptions({
+            breaks: true,
+            gfm: true
+        });
+
+        async function updateTokenCount() {
+            try {
+                const res = await fetch('/tokens');
+                const data = await res.json();
+                const count = data.total_tokens;
+                const percentage = Math.min((count / TOKEN_LIMIT) * 100, 100);
+                
+                tokenText.innerText = `${count.toLocaleString()} / ${TOKEN_LIMIT.toLocaleString()} tokens`;
+                tokenBar.style.width = `${percentage}%`;
+
+                if (count > 0) {
+                    clearCtxBtn.classList.remove('hidden');
+                } else {
+                    clearCtxBtn.classList.add('hidden');
+                }
+
+                if (percentage > 80) {
+                    tokenBar.className = "bg-red-500 h-full transition-all duration-500";
+                    tokenText.className = "token-high";
+                } else if (percentage > 50) {
+                    tokenBar.className = "bg-amber-500 h-full transition-all duration-500";
+                    tokenText.className = "token-mid";
+                } else {
+                    tokenBar.className = "bg-gray-400 h-full transition-all duration-500";
+                    tokenText.className = "token-low";
+                }
+            } catch (e) { console.error("Token update failed", e); }
+        }
+
+        async function loadHistory() {
+            const res = await fetch('/history');
+            const history = await res.json();
+            history.forEach(msg => appendMessage(msg.role, msg.content));
+            updateTokenCount();
+        }
+        loadHistory();
+
+        function appendMessage(role, text) {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `flex gap-4 ${role === 'user' ? 'justify-end' : ''}`;
+            
+            // For user messages, we show plain text. For bot, we parse Markdown.
+            const content = role === 'user' 
+                ? `<div class="whitespace-pre-wrap">${text}</div>` 
+                : `<div class="markdown-content">${marked.parse(text)}</div>`;
+
+            msgDiv.innerHTML = `
+                ${role !== 'user' ? '<div class="w-8 h-8 rounded-full border border-gray-200 flex items-center justify-center shrink-0"><i data-lucide="bot" class="w-4 h-4 text-gray-600"></i></div>' : ''}
+                <div class="${role === 'user' ? 'bg-gray-100 text-gray-800' : 'text-gray-700'} px-4 py-2.5 rounded-2xl max-w-[85%] text-sm leading-relaxed">
+                    ${content}
+                </div>
+            `;
+            chatBox.appendChild(msgDiv);
+            lucide.createIcons();
+            chatBox.scrollTop = chatBox.scrollHeight;
+            return msgDiv;
+        }
+
+        // New Session Action
+        newSessionBtn.onclick = async () => {
+            if (confirm("Start a new session? This will clear current history and files.")) {
+                await fetch('/new-session', { method: 'POST' });
+                window.location.reload();
+            }
+        };
+
+        clearCtxBtn.onclick = async () => {
+            if (confirm("Remove all uploaded documents from this chat session?")) {
+                await fetch('/clear-context', { method: 'POST' });
+                attachmentList.innerHTML = '';
+                updateTokenCount();
+                appendMessage('bot', "I've cleared the uploaded documents from my memory. What else can I help with?");
+            }
+        };
+
+        attachBtn.onclick = () => fileInput.click();
+        fileInput.onchange = async () => {
+            for (let file of fileInput.files) {
+                const tag = document.createElement('div');
+                tag.className = "bg-gray-100 text-[10px] px-2 py-1 rounded flex items-center gap-1 border border-gray-200 animate-pulse";
+                tag.innerHTML = `<i data-lucide="file-text" class="w-3 h-3"></i> ${file.name}`;
+                attachmentList.appendChild(tag);
+                
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                const res = await fetch('/upload', { method: 'POST', body: formData });
+                if(res.ok) {
+                    tag.classList.remove('animate-pulse');
+                    tag.classList.add('bg-blue-50', 'text-blue-600', 'border-blue-100');
+                    updateTokenCount();
+                } else {
+                    tag.classList.remove('animate-pulse');
+                    tag.classList.add('bg-red-50', 'text-red-600', 'border-red-100');
+                    const errorData = await res.json();
+                    alert("Error uploading: " + errorData.error);
+                }
+            }
+        };
+
+        chatForm.onsubmit = async (e) => {
+            e.preventDefault();
+            const msg = messageInput.value.trim();
+            if (!msg) return;
+
+            appendMessage('user', msg);
+            messageInput.value = '';
+            messageInput.style.height = 'auto';
+            attachmentList.innerHTML = '';
+            updateTokenCount();
+            
+            const loading = appendMessage('bot', '...');
+            
+            const res = await fetch('/chat', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ message: msg })
+            });
+            const data = await res.json();
+            chatBox.removeChild(loading);
+            appendMessage('bot', data.response);
+            updateTokenCount();
+        };
+
+        messageInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                if (!e.ctrlKey && !e.shiftKey && !e.metaKey) {
+                    e.preventDefault();
+                    chatForm.dispatchEvent(new Event('submit'));
+                }
+            }
+        });
+
+        messageInput.oninput = function() {
+            this.style.height = 'auto';
+            this.style.height = (this.scrollHeight) + 'px';
+        };
+    </script>
+</body>
+</html>
